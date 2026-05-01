@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Control de Gastos Familiar</title>
+    
+    <!-- PWA Meta Tags -->
+    <meta name="description" content="Control de gastos familiares compartido en tiempo real">
+    <meta name="theme-color" content="#3b82f6">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Control Gastos">
+    
+    <!-- Manifest -->
+    <link rel="manifest" href="manifest.json">
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+    
+    <!-- React -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Recharts -->
+    <script src="https://unpkg.com/recharts@2.5.0/dist/Recharts.js"></script>
+    
+    <style>
+        body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+        }
+        .loading-spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #3b82f6;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div id="root">
+        <div style="display: flex; justify-content: center; align-items: center; height: 100vh; flex-direction: column;">
+            <div class="loading-spinner"></div>
+            <p style="margin-top: 20px; color: #666;">Cargando aplicación...</p>
+        </div>
+    </div>
+
+    <!-- Service Worker -->
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('./sw.js')
+                    .then(reg => console.log('✅ Service Worker registrado'))
+                    .catch(err => console.error('❌ Error SW:', err));
+            });
+        }
+    </script>
+
+    <!-- Babel -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Aplicación React con Firebase -->
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+        const { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } = Recharts;
+
+        // 🔥 TU CONFIGURACIÓN DE FIREBASE
+        const firebaseConfig = {
+          apiKey: "AIzaSyAMXq9Lv-DoNtHX6U0kZcdyQ4dCTHL4iT0",
+          authDomain: "control-gastos-familiar-1e142.firebaseapp.com",
+          databaseURL: "https://control-gastos-familiar-1e142-default-rtdb.europe-west1.firebasedatabase.app",
+          projectId: "control-gastos-familiar-1e142",
+          storageBucket: "control-gastos-familiar-1e142.firebasestorage.app",
+          messagingSenderId: "967296096824",
+          appId: "1:967296096824:web:55b039b12383873c0da4cd"
+        };
+
+        // Inicializar Firebase
+        if (!firebase.apps.length) {
+            firebase.initializeApp(firebaseConfig);
+        }
+        const database = firebase.database();
+
+        const ExpenseTrackerApp = () => {
+            const [currentMonth, setCurrentMonth] = useState(new Date().getMonth());
+            const [currentYear, setCurrentYear] = useState(new Date().getFullYear());
+            const [activeView, setActiveView] = useState('monthly');
+            const [editingItem, setEditingItem] = useState(null);
+            const [editValues, setEditValues] = useState({ concepto: '', valor: 0 });
+            const [isOnline, setIsOnline] = useState(navigator.onLine);
+            const [isSyncing, setIsSyncing] = useState(false);
+            const [lastSync, setLastSync] = useState(null);
+            const [isLoading, setIsLoading] = useState(true);
+
+            const monthNames = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+
+            const defaultMonthData = {
+                ingresos: 2000,
+                gastosFixos: [
+                    { id: 1, concepto: 'Hipoteca', valor: 800 },
+                    { id: 2, concepto: 'Gasolina', valor: 150 },
+                    { id: 3, concepto: 'Comunidad 1', valor: 100 },
+                    { id: 4, concepto: 'Comunidad 2', valor: 80 },
+                    { id: 5, concepto: 'Colegio', valor: 200 },
+                    { id: 6, concepto: 'Seguros Casa', valor: 60 },
+                    { id: 7, concepto: 'Seguros Coche', valor: 50 },
+                    { id: 8, concepto: 'Internet/Teléfono', valor: 45 },
+                    { id: 9, concepto: 'Electricidad', valor: 80 },
+                    { id: 10, concepto: 'Agua', valor: 35 }
+                ],
+                gastosVariables: [
+                    { id: 1, concepto: 'Cumple Paco', valor: 0 },
+                    { id: 2, concepto: 'Cumple Helia', valor: 0 },
+                    { id: 3, concepto: 'Cumple Joana', valor: 0 },
+                    { id: 4, concepto: 'Cumple Hector', valor: 0 },
+                    { id: 5, concepto: 'Supermercado', valor: 300 },
+                    { id: 6, concepto: 'Restaurantes', valor: 0 },
+                    { id: 7, concepto: 'Ocio/Entretenimiento', valor: 0 },
+                    { id: 8, concepto: 'Ropa', valor: 0 },
+                    { id: 9, concepto: 'Farmacia/Salud', valor: 0 },
+                    { id: 10, concepto: 'Regalos', valor: 0 }
+                ],
+                ahorros: [
+                    { id: 1, concepto: 'Cuota final toyota', valor: 200 },
+                    { id: 2, concepto: 'Manto coches', valor: 100 },
+                    { id: 3, concepto: 'Plan Pensiones', valor: 150 },
+                    { id: 4, concepto: 'Ahorro Emergencia', valor: 100 },
+                    { id: 5, concepto: 'Ahorro Vacaciones', valor: 50 }
+                ]
+            };
+
+            const [monthlyData, setMonthlyData] = useState(() => {
+                const initialData = {};
+                for (let month = 0; month < 12; month++) {
+                    initialData[month] = JSON.parse(JSON.stringify(defaultMonthData));
+                }
+                return initialData;
+            });
+
+            useEffect(() => {
+                const handleOnline = () => setIsOnline(true);
+                const handleOffline = () => setIsOnline(false);
+                window.addEventListener('online', handleOnline);
+                window.addEventListener('offline', handleOffline);
+                return () => {
+                    window.removeEventListener('online', handleOnline);
+                    window.removeEventListener('offline', handleOffline);
+                };
+            }, []);
+
+            useEffect(() => {
+                const dataRef = database.ref(`gastos/${currentYear}`);
+                
+                const handleData = (snapshot) => {
+                    const data = snapshot.val();
+                    if (data) {
+                        setMonthlyData(data);
+                        setLastSync(new Date());
+                    } else {
+                        const initialData = {};
+                        for (let month = 0; month < 12; month++) {
+                            initialData[month] = JSON.parse(JSON.stringify(defaultMonthData));
+                        }
+                        dataRef.set(initialData);
+                    }
+                    setIsLoading(false);
+                    setIsSyncing(false);
+                };
+
+                dataRef.on('value', handleData);
+                return () => dataRef.off('value', handleData);
+            }, [currentYear]);
+
+            const saveToFirebase = (newData) => {
+                setIsSyncing(true);
+                database.ref(`gastos/${currentYear}`).set(newData)
+                    .then(() => {
+                        setLastSync(new Date());
+                        setIsSyncing(false);
+                    })
+                    .catch((error) => {
+                        console.error('Error:', error);
+                        setIsSyncing(false);
+                        alert('Error al guardar');
+                    });
+            };
+
+            const currentData = monthlyData[currentMonth] || defaultMonthData;
+
+            const totalGastosFijos = currentData.gastosFixos.reduce((sum, item) => sum + item.valor, 0);
+            const totalGastosVariables = currentData.gastosVariables.reduce((sum, item) => sum + item.valor, 0);
+            const totalAhorros = currentData.ahorros.reduce((sum, item) => sum + item.valor, 0);
+
+            const objetivoGastosFijos = currentData.ingresos * 0.5;
+            const objetivoGastosVariables = currentData.ingresos * 0.3;
+            const objetivoAhorros = currentData.ingresos * 0.2;
+
+            const diferencialFijos = objetivoGastosFijos - totalGastosFijos;
+            const diferencialVariables = objetivoGastosVariables - totalGastosVariables;
+            const diferencialAhorros = objetivoAhorros - totalAhorros;
+
+            const saldoFinal = currentData.ingresos - totalGastosFijos - totalGastosVariables - totalAhorros;
+
+            const chartData = [
+                { name: 'Gastos Fijos', value: totalGastosFijos, color: '#DC2626' },
+                { name: 'Gastos Variables', value: totalGastosVariables, color: '#7C3AED' },
+                { name: 'Ahorros', value: totalAhorros, color: '#0891B2' },
+                { name: 'Saldo', value: Math.max(0, saldoFinal), color: '#059669' }
+            ].filter(item => item.value > 0);
+
+            const updateIngresos = (val) => {
+                const newData = {...monthlyData};
+                newData[currentMonth].ingresos = val;
+                setMonthlyData(newData);
+                saveToFirebase(newData);
+            };
+
+            const addItem = (cat) => {
+                const newData = {...monthlyData};
+                newData[currentMonth][cat] = [...newData[currentMonth][cat], {id: Date.now(), concepto: 'Nuevo', valor: 0}];
+                setMonthlyData(newData);
+                saveToFirebase(newData);
+            };
+
+            const deleteItem = (cat, id) => {
+                if (!confirm('¿Eliminar?')) return;
+                const newData = {...monthlyData};
+                newData[currentMonth][cat] = newData[currentMonth][cat].filter(i => i.id !== id);
+                setMonthlyData(newData);
+                saveToFirebase(newData);
+            };
+
+            const startEdit = (cat, item) => {
+                setEditingItem(`${cat}-${item.id}`);
+                setEditValues({concepto: item.concepto, valor: item.valor});
+            };
+
+            const saveEdit = (cat, id) => {
+                const newData = {...monthlyData};
+                newData[currentMonth][cat] = newData[currentMonth][cat].map(i => 
+                    i.id === id ? {...i, ...editValues} : i
+                );
+                setMonthlyData(newData);
+                saveToFirebase(newData);
+                setEditingItem(null);
+            };
+
+            const CategorySection = ({title, items, cat, obj, tot, dif, color}) => (
+                <div className="bg-white rounded-lg shadow-md p-4 mb-4">
+                    <div className="flex justify-between mb-3">
+                        <h3 className="text-lg font-bold">{title}</h3>
+                        <button onClick={() => addItem(cat)} className="p-2 bg-blue-500 text-white rounded">+</button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 mb-4 text-sm">
+                        <div className={`p-2 rounded ${color} text-white`}>Objetivo: €{obj.toFixed(2)}</div>
+                        <div className="p-2 bg-gray-100 rounded">Real: €{tot.toFixed(2)}</div>
+                        <div className={`p-2 col-span-2 rounded ${dif < 0 ? 'bg-red-500' : 'bg-green-500'} text-white`}>
+                            Diferencial: €{dif.toFixed(2)}
+                        </div>
+                    </div>
+                    <div className="space-y-2">
+                        {items.map(item => (
+                            <div key={item.id} className="flex gap-2 p-2 bg-gray-50 rounded items-center">
+                                {editingItem === `${cat}-${item.id}` ? (
+                                    <>
+                                        <input value={editValues.concepto} onChange={e => setEditValues({...editValues, concepto: e.target.value})} className="flex-1 p-1 border rounded text-sm" />
+                                        <input type="number" value={editValues.valor} onChange={e => setEditValues({...editValues, valor: parseFloat(e.target.value) || 0})} className="w-20 p-1 border rounded text-sm" />
+                                        <button onClick={() => saveEdit(cat, item.id)} className="px-2 py-1 bg-green-500 text-white rounded text-xs">✓</button>
+                                        <button onClick={() => setEditingItem(null)} className="px-2 py-1 bg-gray-500 text-white rounded text-xs">✕</button>
+                                    </>
+                                ) : (
+                                    <>
+                                        <span className="flex-1 text-sm">{item.concepto}</span>
+                                        <span className="w-16 text-sm font-medium">€{item.valor}</span>
+                                        <button onClick={() => startEdit(cat, item)} className="px-2 py-1 bg-blue-500 text-white rounded text-xs">✎</button>
+                                        <button onClick={() => deleteItem(cat, item.id)} className="px-2 py-1 bg-red-500 text-white rounded text-xs">🗑</button>
+                                    </>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+
+            if (isLoading) {
+                return <div className="min-h-screen flex items-center justify-center"><div className="loading-spinner"></div></div>;
+            }
+
+            if (activeView === 'yearly') {
+                const totals = {ing: 0, fij: 0, var: 0, aho: 0};
+                for (let m = 0; m < 12; m++) {
+                    totals.ing += monthlyData[m].ingresos;
+                    totals.fij += monthlyData[m].gastosFixos.reduce((s,i) => s+i.valor, 0);
+                    totals.var += monthlyData[m].gastosVariables.reduce((s,i) => s+i.valor, 0);
+                    totals.aho += monthlyData[m].ahorros.reduce((s,i) => s+i.valor, 0);
+                }
+                const bal = totals.ing - totals.fij - totals.var - totals.aho;
+                return (
+                    <div className="min-h-screen bg-gray-100 p-4">
+                        <div className="max-w-md mx-auto">
+                            <div className="flex justify-between mb-6 bg-white p-4 rounded-lg shadow">
+                                <h1 className="text-xl font-bold">Resumen {currentYear}</h1>
+                                <button onClick={() => setActiveView('monthly')} className="px-4 py-2 bg-blue-500 text-white rounded">Volver</button>
+                            </div>
+                            <div className="bg-white rounded-lg shadow p-6 space-y-4">
+                                <div className="flex justify-between p-3 bg-green-100 rounded"><span>Ingresos:</span><span className="font-bold">€{totals.ing.toFixed(2)}</span></div>
+                                <div className="flex justify-between p-3 bg-red-100 rounded"><span>G. Fijos:</span><span className="font-bold">€{totals.fij.toFixed(2)}</span></div>
+                                <div className="flex justify-between p-3 bg-purple-100 rounded"><span>G. Variables:</span><span className="font-bold">€{totals.var.toFixed(2)}</span></div>
+                                <div className="flex justify-between p-3 bg-blue-100 rounded"><span>Ahorros:</span><span className="font-bold">€{totals.aho.toFixed(2)}</span></div>
+                                <div className={`flex justify-between p-3 rounded ${bal >= 0 ? 'bg-green-500' : 'bg-red-500'} text-white`}>
+                                    <span>Balance:</span><span className="font-bold">€{bal.toFixed(2)}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="min-h-screen bg-gray-100 p-4">
+                    <div className="max-w-md mx-auto">
+                        <div className="mb-2 flex justify-between text-xs">
+                            <span className={isOnline ? 'text-green-600' : 'text-red-600'}>
+                                {isOnline ? '🟢 En línea' : '🔴 Sin conexión'}
+                            </span>
+                            {lastSync && <span className="text-gray-500">Sync: {lastSync.toLocaleTimeString('es', {hour:'2-digit',minute:'2-digit'})}</span>}
+                        </div>
+
+                        <div className="bg-white rounded-lg shadow p-4 mb-6">
+                            <div className="flex justify-between mb-4">
+                                <button onClick={() => setCurrentMonth(currentMonth === 0 ? 11 : currentMonth - 1)} className="p-2 bg-gray-500 text-white rounded">◀</button>
+                                <div className="text-center">
+                                    <h1 className="text-lg font-bold">{monthNames[currentMonth]} {currentYear}</h1>
+                                    <p className="text-sm text-gray-600">Ingresos: €{currentData.ingresos.toFixed(2)}</p>
+                                </div>
+                                <button onClick={() => setCurrentMonth(currentMonth === 11 ? 0 : currentMonth + 1)} className="p-2 bg-gray-500 text-white rounded">▶</button>
+                            </div>
+
+                            <div className="h-48">
+                                <ResponsiveContainer width="100%" height="100%">
+                                    <PieChart>
+                                        <Pie data={chartData} cx="50%" cy="50%" innerRadius={40} outerRadius={70} dataKey="value">
+                                            {chartData.map((e, i) => <Cell key={i} fill={e.color} />)}
+                                        </Pie>
+                                    </PieChart>
+                                </ResponsiveContainer>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2 mb-4">
+                            <button onClick={() => setActiveView('yearly')} className="p-2 bg-purple-500 text-white rounded text-sm">📊 Anual</button>
+                            <button onClick={() => window.print()} className="p-2 bg-green-500 text-white rounded text-sm">🖨 Imprimir</button>
+                        </div>
+
+                        <div className="bg-white rounded-lg shadow p-4 mb-4">
+                            <div className="flex justify-between items-center">
+                                <h3 className="font-bold">Ingresos del Mes</h3>
+                                <input type="number" value={currentData.ingresos} onChange={e => updateIngresos(parseFloat(e.target.value) || 0)} className="w-24 p-2 border rounded text-right font-bold" />
+                            </div>
+                        </div>
+
+                        <CategorySection title="GASTOS FIJOS (50%)" items={currentData.gastosFixos} cat="gastosFixos" obj={objetivoGastosFijos} tot={totalGastosFijos} dif={diferencialFijos} color="bg-red-600" />
+                        <CategorySection title="GASTOS VARIABLES (30%)" items={currentData.gastosVariables} cat="gastosVariables" obj={objetivoGastosVariables} tot={totalGastosVariables} dif={diferencialVariables} color="bg-purple-600" />
+                        <CategorySection title="AHORROS (20%)" items={currentData.ahorros} cat="ahorros" obj={objetivoAhorros} tot={totalAhorros} dif={diferencialAhorros} color="bg-cyan-600" />
+
+                        <div className="bg-white rounded-lg shadow p-4">
+                            <div className={`p-4 rounded text-center ${saldoFinal >= 0 ? 'bg-green-500' : 'bg-red-500'} text-white`}>
+                                <h3 className="text-lg font-bold">Saldo Final</h3>
+                                <div className="text-2xl font-bold">€{saldoFinal.toFixed(2)}</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        ReactDOM.render(<ExpenseTrackerApp />, document.getElementById('root'));
+    </script>
+</body>
+</html>
