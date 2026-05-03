@@ -258,3 +258,211 @@
             const totalGastosFijos = currentData.gastosFixos.reduce((sum, item) => sum + item.valor, 0);
             const totalGastosVariables = currentData.gastosVariables.reduce((sum, item) => sum + item.valor, 0);
             const totalAhorros = currentData.ahorros.reduce((sum, item) => sum + item.valor, 0);
+
+            const objetivoGastosFijos = currentData.ingresos * 0.5;
+            const objetivoGastosVariables = currentData.ingresos * 0.3;
+            const objetivoAhorros = currentData.ingresos * 0.2;
+
+            const diferencialFijos = objetivoGastosFijos - totalGastosFijos;
+            const diferencialVariables = objetivoGastosVariables - totalGastosVariables;
+            const diferencialAhorros = objetivoAhorros - totalAhorros;
+
+            const saldoFinal = currentData.ingresos - totalGastosFijos - totalGastosVariables - totalAhorros;
+
+            const chartData = [
+                { name: 'Gastos Fijos', value: totalGastosFijos, color: '#DC2626' },
+                { name: 'Gastos Variables', value: totalGastosVariables, color: '#7C3AED' },
+                { name: 'Ahorros', value: totalAhorros, color: '#0891B2' },
+                { name: 'Saldo', value: Math.max(0, saldoFinal), color: '#059669' }
+            ].filter(item => item.value > 0);
+
+            const updateIngresos = (val) => {
+                const newData = {...monthlyData};
+                newData[currentMonth].ingresos = val;
+                setMonthlyData(newData);
+                saveToFirebase(newData);
+            };
+
+            const addItem = (cat) => {
+                const newData = {...monthlyData};
+                newData[currentMonth][cat] = [...newData[currentMonth][cat], {id: Date.now(), concepto: 'Nuevo', valor: 0}];
+                setMonthlyData(newData);
+                saveToFirebase(newData);
+            };
+
+            const deleteItem = (cat, id) => {
+                if (!confirm('¿Eliminar?')) return;
+                const newData = {...monthlyData};
+                newData[currentMonth][cat] = newData[currentMonth][cat].filter(i => i.id !== id);
+                setMonthlyData(newData);
+                saveToFirebase(newData);
+            };
+
+            const startEdit = (cat, item) => {
+                setEditingItem(`${cat}-${item.id}`);
+                setEditValues({concepto: item.concepto, valor: item.valor});
+            };
+
+            const saveEdit = (cat, id) => {
+                const newData = {...monthlyData};
+                newData[currentMonth][cat] = newData[currentMonth][cat].map(i => 
+                    i.id === id ? {...i, ...editValues} : i
+                );
+                setMonthlyData(newData);
+                saveToFirebase(newData);
+                setEditingItem(null);
+            };
+
+            const navigateMonth = (dir) => {
+                if (dir === 'prev') {
+                    if (currentMonth === 0) {
+                        setCurrentMonth(11);
+                        setCurrentYear(y => y - 1);
+                    } else {
+                        setCurrentMonth(m => m - 1);
+                    }
+                } else {
+                    if (currentMonth === 11) {
+                        setCurrentMonth(0);
+                        setCurrentYear(y => y + 1);
+                    } else {
+                        setCurrentMonth(m => m + 1);
+                    }
+                }
+            };
+
+            const CategorySection = ({title, items, cat, obj, tot, dif, color}) => (
+                <div className="bg-white rounded-lg shadow-md p-4 mb-4">
+                    <div className="flex justify-between mb-3">
+                        <h3 className="text-lg font-bold">{title}</h3>
+                        <button onClick={() => addItem(cat)} className="p-2 bg-blue-500 text-white rounded">+</button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 mb-4 text-sm">
+                        <div className={`p-2 rounded ${color} text-white`}>Objetivo: €{obj.toFixed(2)}</div>
+                        <div className="p-2 bg-gray-100 rounded">Real: €{tot.toFixed(2)}</div>
+                        <div className={`p-2 col-span-2 rounded ${dif < 0 ? 'bg-red-500' : 'bg-green-500'} text-white`}>
+                            Diferencial: €{dif.toFixed(2)}
+                        </div>
+                    </div>
+                    <div className="space-y-2">
+                        {items.map(item => (
+                            <div key={item.id} className="flex gap-2 p-2 bg-gray-50 rounded items-center">
+                                {editingItem === `${cat}-${item.id}` ? (
+                                    <>
+                                        <input value={editValues.concepto} onChange={e => setEditValues({...editValues, concepto: e.target.value})} className="flex-1 p-1 border rounded text-sm" autoFocus />
+                                        <input type="number" value={editValues.valor} onChange={e => setEditValues({...editValues, valor: parseFloat(e.target.value) || 0})} className="w-20 p-1 border rounded text-sm" />
+                                        <button onClick={() => saveEdit(cat, item.id)} className="px-2 py-1 bg-green-500 text-white rounded text-xs">✓</button>
+                                        <button onClick={() => setEditingItem(null)} className="px-2 py-1 bg-gray-500 text-white rounded text-xs">✕</button>
+                                    </>
+                                ) : (
+                                    <>
+                                        <span className="flex-1 text-sm">{item.concepto}</span>
+                                        <span className="w-16 text-sm font-medium">€{item.valor}</span>
+                                        <button onClick={() => startEdit(cat, item)} className="px-2 py-1 bg-blue-500 text-white rounded text-xs">✎</button>
+                                        <button onClick={() => deleteItem(cat, item.id)} className="px-2 py-1 bg-red-500 text-white rounded text-xs">🗑</button>
+                                    </>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+
+            if (isLoading) {
+                return <div className="min-h-screen flex items-center justify-center"><div className="loading-spinner"></div></div>;
+            }
+
+            if (activeView === 'yearly') {
+                const totals = {ing: 0, fij: 0, var: 0, aho: 0};
+                for (let m = 0; m < 12; m++) {
+                    totals.ing += monthlyData[m].ingresos;
+                    totals.fij += monthlyData[m].gastosFixos.reduce((s,i) => s+i.valor, 0);
+                    totals.var += monthlyData[m].gastosVariables.reduce((s,i) => s+i.valor, 0);
+                    totals.aho += monthlyData[m].ahorros.reduce((s,i) => s+i.valor, 0);
+                }
+                const bal = totals.ing - totals.fij - totals.var - totals.aho;
+                return (
+                    <div className="min-h-screen bg-gray-100 p-4">
+                        <div className="max-w-md mx-auto">
+                            <div className="flex justify-between mb-6 bg-white p-4 rounded-lg shadow">
+                                <h1 className="text-xl font-bold">Resumen {currentYear}</h1>
+                                <button onClick={() => setActiveView('monthly')} className="px-4 py-2 bg-blue-500 text-white rounded">Volver</button>
+                            </div>
+                            <div className="bg-white rounded-lg shadow p-6 space-y-4">
+                                <div className="flex justify-between p-3 bg-green-100 rounded"><span>Ingresos:</span><span className="font-bold">€{totals.ing.toFixed(2)}</span></div>
+                                <div className="flex justify-between p-3 bg-red-100 rounded"><span>G. Fijos:</span><span className="font-bold">€{totals.fij.toFixed(2)}</span></div>
+                                <div className="flex justify-between p-3 bg-purple-100 rounded"><span>G. Variables:</span><span className="font-bold">€{totals.var.toFixed(2)}</span></div>
+                                <div className="flex justify-between p-3 bg-blue-100 rounded"><span>Ahorros:</span><span className="font-bold">€{totals.aho.toFixed(2)}</span></div>
+                                <div className={`flex justify-between p-3 rounded ${bal >= 0 ? 'bg-green-500' : 'bg-red-500'} text-white`}>
+                                    <span>Balance:</span><span className="font-bold">€{bal.toFixed(2)}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="min-h-screen bg-gray-100 p-4">
+                    <div className="max-w-md mx-auto">
+                        <div className="mb-2 flex justify-between text-xs">
+                            <span className={isOnline ? 'text-green-600' : 'text-red-600'}>
+                                {isOnline ? '🟢 En línea' : '🔴 Sin conexión'}
+                                {isSyncing && ' (sincronizando...)'}
+                            </span>
+                            {lastSync && <span className="text-gray-500">Sync: {lastSync.toLocaleTimeString('es', {hour:'2-digit',minute:'2-digit'})}</span>}
+                        </div>
+
+                        <div className="bg-white rounded-lg shadow p-4 mb-6">
+                            <div className="flex justify-between mb-4">
+                                <button onClick={() => navigateMonth('prev')} className="p-2 bg-gray-500 text-white rounded">◀</button>
+                                <div className="text-center">
+                                    <h1 className="text-lg font-bold">{monthNames[currentMonth]} {currentYear}</h1>
+                                    <p className="text-sm text-gray-600">Ingresos: €{currentData.ingresos.toFixed(2)}</p>
+                                </div>
+                                <button onClick={() => navigateMonth('next')} className="p-2 bg-gray-500 text-white rounded">▶</button>
+                            </div>
+
+                            <PieChartSimple data={chartData} />
+                            
+                            <div className="grid grid-cols-2 gap-2 mt-4">
+                                {chartData.map((item, i) => (
+                                    <div key={i} className="flex items-center text-xs">
+                                        <div className="w-3 h-3 rounded-full mr-2" style={{backgroundColor: item.color}}></div>
+                                        <span className="truncate">{item.name}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2 mb-4">
+                            <button onClick={() => setActiveView('yearly')} className="p-2 bg-purple-500 text-white rounded text-sm">📊 Anual</button>
+                            <button onClick={() => window.print()} className="p-2 bg-green-500 text-white rounded text-sm">🖨 Imprimir</button>
+                        </div>
+
+                        <div className="bg-white rounded-lg shadow p-4 mb-4">
+                            <div className="flex justify-between items-center">
+                                <h3 className="font-bold">Ingresos del Mes</h3>
+                                <input type="number" value={currentData.ingresos} onChange={e => updateIngresos(parseFloat(e.target.value) || 0)} className="w-24 p-2 border rounded text-right font-bold" />
+                            </div>
+                        </div>
+
+                        <CategorySection title="GASTOS FIJOS (50%)" items={currentData.gastosFixos} cat="gastosFixos" obj={objetivoGastosFijos} tot={totalGastosFijos} dif={diferencialFijos} color="bg-red-600" />
+                        <CategorySection title="GASTOS VARIABLES (30%)" items={currentData.gastosVariables} cat="gastosVariables" obj={objetivoGastosVariables} tot={totalGastosVariables} dif={diferencialVariables} color="bg-purple-600" />
+                        <CategorySection title="AHORROS (20%)" items={currentData.ahorros} cat="ahorros" obj={objetivoAhorros} tot={totalAhorros} dif={diferencialAhorros} color="bg-cyan-600" />
+
+                        <div className="bg-white rounded-lg shadow p-4">
+                            <div className={`p-4 rounded text-center ${saldoFinal >= 0 ? 'bg-green-500' : 'bg-red-500'} text-white`}>
+                                <h3 className="text-lg font-bold">Saldo Final</h3>
+                                <div className="text-2xl font-bold">€{saldoFinal.toFixed(2)}</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        ReactDOM.render(<ExpenseTrackerApp />, document.getElementById('root'));
+    </script>
+</body>
+</html>
